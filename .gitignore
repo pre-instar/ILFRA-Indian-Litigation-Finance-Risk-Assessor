@@ -1,0 +1,17 @@
+# Data files
+data/
+*.csv
+*.xlsx
+*.json
+*.pkl
+*.joblib
+
+# Model files (if large)
+models/*.pkl
+models/*.joblib
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
