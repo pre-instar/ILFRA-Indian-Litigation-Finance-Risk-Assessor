@@ -17,3 +17,6 @@ __pycache__/
 # Environment
 .env
 venv/
+
+#Dev container
+.devcontainer/
