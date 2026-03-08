@@ -132,7 +132,9 @@ def build_ibc_features(df: pd.DataFrame, fit: bool = True,
         df["resolution_applicants_received"] / df["no_of_financial_creditors"].clip(1)
     )
 
-    ibc_cats = ["sector", "bench"]
+    # resolution_status is the strongest predictor of realisation_pct
+    # (Liquidation → ~3%, Resolution Plan Approved → ~34%, Settled/Withdrawn → ~62%)
+    ibc_cats = ["sector", "bench", "resolution_status"]
     for col in ibc_cats:
         if fit:
             le = LabelEncoder()
@@ -149,10 +151,27 @@ def build_ibc_features(df: pd.DataFrame, fit: bool = True,
 
 def get_ibc_feature_cols() -> list[str]:
     return [
-        "sector_enc", "bench_enc", "admission_year",
-        "log_admitted_claim", "no_of_financial_creditors",
-        "resolution_applicants_received", "applicants_per_creditor",
-        "ip_changed", "litigation_pending",
+        # Outcome signals (strongest predictors — ~77% of importance)
+        "resolution_status_enc",  # Liquidation vs Resolution vs Settled/Withdrawn
+        "favourable_outcome",     # binary summary of resolution_status
+
+        # Financial signals
+        "log_admitted_claim",
+        "duration_days",          # time taken correlates with recovery complexity
+
+        # Creditor / applicant dynamics
+        "no_of_financial_creditors",
+        "resolution_applicants_received",
+        "applicants_per_creditor",
+
+        # Process risk signals
+        "ip_changed",
+        "litigation_pending",
+
+        # Context
+        "sector_enc",
+        "bench_enc",
+        "admission_year",
     ]
 
 

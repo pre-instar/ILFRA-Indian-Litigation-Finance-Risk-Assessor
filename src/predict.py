@@ -117,17 +117,47 @@ def predict_case(case: dict, models: dict) -> dict:
     realisation = None
     if is_ibc or is_money:
         ibc_enc = models["ibc_encoders"]
+
+        # Map the user-visible case_type to a resolution_status bucket for inference.
+        # At assessment time the final status is unknown, so we use a data-informed prior:
+        # IBC cases are majority "Ongoing" (unknown outcome); money recovery suits are
+        # treated as civil equivalents and default to "Resolution Plan Approved" as a
+        # conservative mid-range anchor.  The model will still use p_favour and other
+        # signals to refine the estimate.
+        _status_map = {
+            "CIRP (IBC)": "Ongoing",
+            "Liquidation (IBC)": "Liquidation Order",
+            "Money Recovery": "Resolution Plan Approved",
+        }
+        resolution_status = _status_map.get(case.get("case_type", ""), "Ongoing")
+
+        num_creditors = int(case.get("no_of_financial_creditors", 1))
+        num_applicants = int(case.get("resolution_applicants_received", 1))
+
         ibc_row = {
-            "sector_enc": _encode_col(case.get("sector", "Others"), ibc_enc.get("ibc_sector", ibc_enc.get("ibc_sector"))),
-            "bench_enc": 0,
-            "admission_year": int(case.get("filing_year", 2021)),
+            # Strongest predictors — must be present
+            "resolution_status_enc": _encode_col(
+                resolution_status, ibc_enc["ibc_resolution_status"]
+            ),
+            "favourable_outcome": int(p_favour >= 0.5),   # use outcome model's estimate
+
+            # Financial
             "log_admitted_claim": np.log1p(claim / 100),  # convert lakhs → crores approx
-            "no_of_financial_creditors": int(case.get("no_of_financial_creditors", 1)),
-            "resolution_applicants_received": int(case.get("resolution_applicants_received", 1)),
-            "applicants_per_creditor": int(case.get("resolution_applicants_received", 1)) /
-                                       max(int(case.get("no_of_financial_creditors", 1)), 1),
+            "duration_days": dur_p50 * 30,                # convert predicted months → days
+
+            # Creditor / applicant dynamics
+            "no_of_financial_creditors": num_creditors,
+            "resolution_applicants_received": num_applicants,
+            "applicants_per_creditor": num_applicants / max(num_creditors, 1),
+
+            # Process risk
             "ip_changed": int(case.get("ip_changed", False)),
             "litigation_pending": int(case.get("litigation_pending", False)),
+
+            # Context
+            "sector_enc": _encode_col(case.get("sector", "Others"), ibc_enc["ibc_sector"]),
+            "bench_enc": 0,   # bench unknown at input time; defaults to first class
+            "admission_year": int(case.get("filing_year", 2021)),
         }
         X_ibc = pd.DataFrame([ibc_row])
         try:
