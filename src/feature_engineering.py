@@ -28,6 +28,11 @@ CATEGORICAL_COLS = ["case_type", "court", "state", "sector"]
 
 def _encode_categoricals(df: pd.DataFrame, fit: bool = True,
                           encoders: dict = None) -> tuple[pd.DataFrame, dict]:
+    """
+    Encodes categorical columns using LabelEncoder.
+    If fit is True, fits new encoders on the data.
+    If fit is False, uses existing encoders to transform data, handling unseen categories gracefully.
+    """
     if encoders is None:
         encoders = {}
     df = df.copy()
@@ -63,6 +68,10 @@ def _court_aggregates(df: pd.DataFrame) -> pd.DataFrame:
 
 def engineer_njdg_features(df: pd.DataFrame, fit: bool = True,
                             encoders: dict = None) -> tuple[pd.DataFrame, dict]:
+    """
+    Main feature engineering pipeline for National Judicial Data Grid (NJDG) data.
+    Generates temporal, financial, and process signal features, and encodes categoricals.
+    """
     df = df.copy()
 
     # Temporal
@@ -106,7 +115,10 @@ def engineer_njdg_features(df: pd.DataFrame, fit: bool = True,
 
 
 def get_feature_cols() -> list[str]:
-    """Canonical list of model input features."""
+    """
+    Returns the canonical list of model input features for NJDG cases.
+    Used to ensure the model receives features in the exact expected order.
+    """
     return [
         "case_type_enc", "court_enc", "court_hierarchy", "state_enc",
         "sector_enc", "filing_year", "filing_quarter", "case_age_months",
@@ -134,13 +146,16 @@ def build_ibc_features(df: pd.DataFrame, fit: bool = True,
 
     # resolution_status is the strongest predictor of realisation_pct
     # (Liquidation → ~3%, Resolution Plan Approved → ~34%, Settled/Withdrawn → ~62%)
+    # Encode categorical columns specifically for IBC data
     ibc_cats = ["sector", "bench", "resolution_status"]
     for col in ibc_cats:
         if fit:
+            # Fit new encoder on the categorical column
             le = LabelEncoder()
             df[col + "_enc"] = le.fit_transform(df[col].astype(str))
             encoders[f"ibc_{col}"] = le
         else:
+            # Transform using existing encoder, defaulting to the first class if unseen
             le = encoders[f"ibc_{col}"]
             known = set(le.classes_)
             df[col] = df[col].apply(lambda x: x if x in known else le.classes_[0])
@@ -150,6 +165,10 @@ def build_ibc_features(df: pd.DataFrame, fit: bool = True,
 
 
 def get_ibc_feature_cols() -> list[str]:
+    """
+    Returns the canonical list of model input features for IBBI/IBC data.
+    Ordered by logical groupings for outcome prediction.
+    """
     return [
         # Outcome signals (strongest predictors — ~77% of importance)
         "resolution_status_enc",  # Liquidation vs Resolution vs Settled/Withdrawn

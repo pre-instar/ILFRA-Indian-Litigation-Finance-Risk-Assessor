@@ -108,8 +108,13 @@ def _sample_outcome(case_type: str, claimant_lawyer_win_rate: float) -> dict:
 
 def generate_synthetic_njdg(n: int = 5000, seed: int = 42) -> pd.DataFrame:
     """
-    Generate a synthetic dataset that mirrors the field structure you would
-    get after joining NJDG case metadata with eCourts judgment outcomes.
+    Generates a synthetic dataset mirroring the combined structure of NJDG case 
+    metadata and eCourts judgment outcomes. 
+    
+    This is useful for local development and testing when live data feeds or 
+    bulk CSV downloads from the public portals are unavailable. The underlying 
+    distributions (e.g. durations, claim amounts, win rates) use heuristics 
+    to roughly approximate real-world Indian litigation patterns.
     """
     rng = random.Random(seed)
     np.random.seed(seed)
@@ -132,7 +137,7 @@ def generate_synthetic_njdg(n: int = 5000, seed: int = 42) -> pd.DataFrame:
         # Claim amount (INR lakhs)
         claim_amount_lakhs = round(np.random.lognormal(4, 1.5), 2)  # ~1L to 10Cr
 
-        # Lawyer / party features
+        # Simulate lawyer and party-specific features that influence outcomes
         claimant_lawyer_win_rate = round(rng.uniform(0.25, 0.80), 2)
         respondent_is_govt = rng.random() < 0.15
         respondent_is_psu = rng.random() < 0.10
@@ -140,6 +145,7 @@ def generate_synthetic_njdg(n: int = 5000, seed: int = 42) -> pd.DataFrame:
         has_interim_order = rng.random() < 0.35
         represented_by_senior_counsel = rng.random() < 0.20
 
+        # Determine the final case outcome based on case type and lawyer skill
         outcome = _sample_outcome(case_type, claimant_lawyer_win_rate)
 
         rows.append({
@@ -169,8 +175,12 @@ def generate_synthetic_njdg(n: int = 5000, seed: int = 42) -> pd.DataFrame:
 
 def generate_synthetic_ibc(n: int = 1500, seed: int = 42) -> pd.DataFrame:
     """
-    Synthetic IBBI CIRP resolution dataset matching fields available
-    from ibbi.gov.in Data → CIRP Data Excel downloads.
+    Generates a synthetic dataset for IBBI (Insolvency and Bankruptcy Board of India)
+    Corporate Insolvency Resolution Process (CIRP) cases.
+    
+    The field structure matches the Excel downloads available from ibbi.gov.in.
+    Models the distribution of outcomes (Resolution, Liquidation, Withdrawal) 
+    and their associated financial realisation percentages.
     """
     rng = random.Random(seed + 1)
     np.random.seed(seed + 1)

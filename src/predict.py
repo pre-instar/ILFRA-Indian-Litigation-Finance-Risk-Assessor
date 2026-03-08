@@ -14,6 +14,7 @@ MODELS_DIR = Path(__file__).parent.parent / "models"
 
 
 def _load(name: str):
+    """Internal helper to load a pickled model or encoder from the models directory."""
     p = MODELS_DIR / name
     if not p.exists():
         raise FileNotFoundError(
@@ -23,6 +24,10 @@ def _load(name: str):
 
 
 def load_models():
+    """
+    Loads into memory all required models (duration, outcome, realisation)
+    and categorical encoders from the models directory.
+    """
     return {
         "duration": _load("duration_model.pkl"),
         "duration_q10": _load("duration_q10.pkl"),
@@ -60,6 +65,10 @@ COURT_AVG_WIN_RATE = {
 
 
 def _encode_col(value: str, encoder, fallback=None):
+    """
+    Safely encodes a categorical string feature for inference.
+    If the value was not seen during training, returns a fallback category to prevent crashes.
+    """
     known = set(encoder.classes_)
     v = value if value in known else (fallback or encoder.classes_[0])
     return int(encoder.transform([v])[0])
@@ -67,8 +76,15 @@ def _encode_col(value: str, encoder, fallback=None):
 
 def predict_case(case: dict, models: dict) -> dict:
     """
-    case: dict with keys matching the Streamlit form fields.
-    Returns a structured assessment dict.
+    Runs inference for a given legal case.
+
+    Args:
+        case: Dictionary with keys matching Streamlit form fields representing raw case properties.
+        models: Dictionary of loaded pre-trained models and encoders.
+
+    Returns:
+        Structured assessment dictionary containing duration percentiles, outcome probability,
+        financial realisation estimates, a composite risk score, and a final recommendation tier.
     """
     enc = models["njdg_encoders"]
 
@@ -103,11 +119,13 @@ def predict_case(case: dict, models: dict) -> dict:
     X = pd.DataFrame([row])
 
     # Duration predictions
+    # Predicts the expected case duration along with 10th and 90th percentile bounds to represent uncertainty
     dur_p50 = float(models["duration"].predict(X)[0])
     dur_p10 = float(models["duration_q10"].predict(X)[0])
     dur_p90 = float(models["duration_q90"].predict(X)[0])
 
     # Outcome probability
+    # Predicts the likelihood (0.0 to 1.0) of a favourable outcome for the claimant
     p_favour = float(models["outcome"].predict_proba(X)[0][1])
 
     # Realisation (IBC / money recovery only)
@@ -194,6 +212,10 @@ def predict_case(case: dict, models: dict) -> dict:
 
 
 def _recommendation(p_fav: float, dur_months: float, realisation: dict | None) -> str:
+    """
+    Maps model outputs (probability of favourability and expected duration) 
+    to a human-readable risk recommendation tier for litigation funding.
+    """
     if p_fav >= 0.65 and dur_months <= 36:
         return "Strong Candidate"
     elif p_fav >= 0.50 and dur_months <= 60:

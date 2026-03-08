@@ -31,19 +31,27 @@ SKL_BASE = dict(n_estimators=200, learning_rate=0.05, max_depth=5, subsample=0.8
 LGB_BASE = dict(n_estimators=300, learning_rate=0.05, num_leaves=63, min_child_samples=20,
                 subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1)
 
+# ── Model Factories ───────────────────────────────────────────────────────────
+
 def make_reg(**kw):
+    """Factory for standard regressors (used for mean models: p50 duration & realisation)."""
     if USE_LGB:
         import lightgbm as lgb
         return lgb.LGBMRegressor(**{**LGB_BASE, **kw})
     return GradientBoostingRegressor(**{**SKL_BASE, **kw})
 
 def make_cls():
+    """Factory for classifiers (used for binary outcome prediction)."""
     if USE_LGB:
         import lightgbm as lgb
         return lgb.LGBMClassifier(**LGB_BASE)
     return GradientBoostingClassifier(**SKL_BASE)
 
 def make_quantile(alpha):
+    """
+    Factory for quantile regressors using Pinball Loss.
+    Used to generate probabilistic bounds (e.g. 10th and 90th percentiles) for risk scoring.
+    """
     if USE_LGB:
         import lightgbm as lgb
         return lgb.LGBMRegressor(objective="quantile", alpha=alpha, **LGB_BASE)
@@ -65,6 +73,11 @@ def get_fi(m, cols):
 
 # ── Duration ──────────────────────────────────────────────────────────────────
 def train_duration(df):
+    """
+    Trains the litigation duration model suite.
+    Includes a core regressor for expected time, and two quantile regressors
+    to establish best-case (q10) and worst-case (q90) timelines.
+    """
     fc = get_feature_cols()
     X, y = df[fc].fillna(0), df["duration_months"]
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -82,6 +95,10 @@ def train_duration(df):
 
 # ── Outcome ───────────────────────────────────────────────────────────────────
 def train_outcome(df):
+    """
+    Trains a binary classifier predicting the probability of a favourable outcome
+    for the claimant. Crucial for assessing baseline case viability.
+    """
     fc = get_feature_cols()
     X, y = df[fc].fillna(0), df["favourable_outcome"]
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -96,6 +113,11 @@ def train_outcome(df):
 
 # ── Realisation ───────────────────────────────────────────────────────────────
 def train_realisation(df):
+    """
+    Trains models estimating the percentage of the claim value likely to be recovered.
+    Only applicable for purely financial/commercial disputes (e.g., IBC).
+    Trains a mean estimator and q10/q90 bounds for financial risk scenarios.
+    """
     fc = get_ibc_feature_cols()
     df = df[df["realisation_pct"].notna()].copy()
     X, y = df[fc].fillna(0), df["realisation_pct"]
