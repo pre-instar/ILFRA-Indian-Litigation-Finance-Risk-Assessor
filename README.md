@@ -11,6 +11,7 @@ The tool evaluates a case and generates three main predictive outputs:
 1. **Expected Duration** — The probable length of time the case proceedings will take, complete with confidence intervals (Optimistic, Median, and Pessimistic timelines).
 2. **Probability of Favourable Outcome** — A calibrated percentage likelihood of a positive result (e.g., winning the lawsuit or reaching a settlement).
 3. **Recovery / Realisation Range** — The expected percentage of the claim amount that might be recovered (specifically relevant for Money Recovery and IBC/Insolvency cases).
+4. **Similar Precedents** — The K most similar historical cases retrieved from the case base, with similarity-weighted outcome estimates and a natural language precedent summary.
 
 ---
 
@@ -23,7 +24,10 @@ The project is structured into the following key modules:
 - **`src/tune.py`** — Runs Optuna-based hyperparameter search with 5-fold cross-validation across all three model families. Outputs `models/best_params.json` consumed by `train.py`.
 - **`src/train.py`** — Trains three model families sequentially using tuned hyperparameters: LightGBM Regressor (Duration), LightGBM Classifier (Outcome), and LightGBM Regressor (Realisation). Automatically triggers calibration on completion.
 - **`src/calibration.py`** — Wraps the trained outcome classifier with isotonic regression calibration so that predicted probabilities are statistically reliable. Outputs `models/outcome_calibrated.pkl` and calibration curve CSVs.
-- **`app/streamlit_app.py`** — The Streamlit frontend. Processes user inputs (Case Age, Lawyer Win Rate, Adjournments, Court Type, Sector, Interim Order status, etc.) and outputs a full risk assessment dashboard with model insights and a calibration reliability diagram.
+- **`src/cbr_case_base.py`** — Builds and serialises the searchable CBR case base from processed NJDG and IBC feature data. Run once after feature engineering. Outputs `models/cbr_case_base.pkl`.
+- **`src/cbr_engine.py`** — Core CBR retrieval and adaptation engine. Computes weighted cosine similarity between a new case query and every historical case, retrieves the K most similar, and derives similarity-weighted outcome estimates.
+- **`src/cbr_explainer.py`** — Converts retrieved precedents into natural language summaries and a blended ML + CBR interpretation for display in the Streamlit UI.
+- **`app/streamlit_app.py`** — The Streamlit frontend. Processes user inputs and outputs a full risk assessment dashboard including ML predictions, a calibration reliability diagram, and a Similar Precedents panel.
 
 ---
 
@@ -68,6 +72,47 @@ Raw LightGBM classifier outputs are not true probabilities — a score of 0.72 d
 
 Isotonic regression is preferred over Platt scaling here because it makes fewer assumptions about the shape of the miscalibration — it only requires that the calibrated probabilities are monotonically increasing with the raw scores, which is well-suited to LightGBM's output distribution.
 
+### Case-Based Reasoning (CBR)
+
+ILFRA augments its ML predictions with a **Case-Based Reasoning** engine inspired by how legal practitioners actually reason — through precedent. Rather than relying solely on statistical patterns, CBR retrieves the most similar historical cases and adapts their known outcomes to inform the current assessment.
+
+The engine follows the classical **4R CBR cycle**:
+
+1. **Retrieve** — Given a new case query, compute weighted cosine similarity against every case in the case base and return the K most similar (default K = 5).
+2. **Reuse** — Derive adapted outcome estimates (duration, win probability, realisation %) using similarity-weighted averaging, so closer precedents contribute more than distant ones.
+3. **Revise** — Blend the CBR-adapted estimates with the ML model predictions. When the two sources agree, confidence is high; when they diverge, the discrepancy is surfaced explicitly as a risk flag.
+4. **Retain** — The case base persists across sessions and can be updated with new resolved cases as they become available.
+
+**Similarity metric — weighted cosine similarity:**
+
+Raw euclidean distance on mixed features is misleading because features like court type (encoded 0–5) and claim amount (potentially thousands of lakhs) have incompatible scales and different semantic importance. ILFRA uses **weighted cosine similarity** where each feature dimension is multiplied by a domain importance weight derived from LightGBM feature importance rankings before the similarity is computed. This means a mismatch on `case_type_enc` (weight 3.0) penalises similarity far more than a mismatch on `filing_quarter` (weight 0.8).
+
+**Feature weights (NJDG case base):**
+
+| Feature | Weight |
+|---|---|
+| `case_type_enc` | 3.0 |
+| `court_enc` | 2.5 |
+| `claimant_lawyer_win_rate` | 2.0 |
+| `court_hierarchy` | 2.0 |
+| `log_claim_amount` | 1.8 |
+| `court_avg_duration` | 1.5 |
+| `court_avg_win_rate` | 1.5 |
+| `adjournment_density` | 1.5 |
+| `has_interim_order` | 1.5 |
+| `respondent_is_govt` | 1.3 |
+| Other features | 0.8 – 1.2 |
+
+**What the UI shows:**
+
+- A natural language precedent summary ("5 similar cases found — 4 resolved favourably, average duration 31 months")
+- A blended ML + CBR commentary that explicitly flags agreements and divergences between the two approaches
+- Individual precedent cards showing similarity score, duration, outcome, and recovery % for each retrieved case
+
+**Why CBR matters for litigation finance:**
+
+ML models produce a number. CBR produces an explanation. A litigation funder evaluating a ₹50Cr commercial dispute can point to five specific precedent cases from the same court and case type that resolved in a comparable timeframe — that is auditable, defensible, and legally meaningful in a way that a gradient boosting score alone is not. When ML and CBR estimates agree, that convergence is a strong confidence signal. When they diverge, it flags genuine uncertainty that a single model score would have hidden entirely.
+
 ---
 
 ## How to Run the Tool
@@ -96,7 +141,15 @@ Transforms raw datasets into ML-ready feature matrices:
 python src/feature_engineering.py
 ```
 
-### 4. Tune Hyperparameters *(recommended, ~5–10 min)*
+### 4. Build the CBR Case Base
+
+Serialises the processed feature data into the searchable case base used by the CBR engine at inference time. Only needs to be re-run if the underlying processed data changes:
+
+```bash
+python src/cbr_case_base.py
+```
+
+### 5. Tune Hyperparameters *(recommended, ~5–10 min)*
 
 Runs Optuna search with 5-fold CV and saves best parameters to `models/best_params.json`:
 
@@ -106,7 +159,7 @@ python src/tune.py
 
 > This step is optional but strongly recommended before training on real data. If skipped, `train.py` uses built-in defaults.
 
-### 5. Train the ML Models
+### 6. Train the ML Models
 
 Trains all three model families using tuned parameters and runs calibration automatically on completion:
 
@@ -117,21 +170,22 @@ python src/train.py
 This produces the following artefacts in `models/`:
 
 ```
-duration_model.pkl          duration_q10.pkl         duration_q90.pkl
-outcome_model.pkl           outcome_calibrated.pkl
-realisation_model.pkl       realisation_q10.pkl      realisation_q90.pkl
-training_metrics.csv        best_params.json
-calibration_curve_raw.csv   calibration_curve_cal.csv
+duration_model.pkl            duration_q10.pkl           duration_q90.pkl
+outcome_model.pkl             outcome_calibrated.pkl
+realisation_model.pkl         realisation_q10.pkl        realisation_q90.pkl
+training_metrics.csv          best_params.json
+calibration_curve_raw.csv     calibration_curve_cal.csv
+cbr_case_base.pkl
 *_feature_importance.csv
 ```
 
-### 6. Launch the Streamlit App
+### 7. Launch the Streamlit App
 
 ```bash
 streamlit run app/streamlit_app.py
 ```
 
-The dashboard opens at `http://localhost:8501`. Navigate through the **Case Assessment**, **Model Insights**, and **How It Works** tabs to interact with the predictions and inspect model behaviour including the calibration reliability diagram.
+The dashboard opens at `http://localhost:8501`. Navigate through the **Case Assessment**, **Model Insights**, and **How It Works** tabs to interact with predictions, inspect model behaviour including the calibration reliability diagram, and explore similar precedent cases retrieved by the CBR engine.
 
 ---
 
@@ -139,8 +193,8 @@ The dashboard opens at `http://localhost:8501`. Navigate through the **Case Asse
 
 | Source | Portal | Used for |
 |---|---|---|
-| NJDG | `njdg.ecourts.gov.in` | Duration and outcome models |
-| IBBI CIRP | `ibbi.gov.in` | Realisation model |
+| NJDG | `njdg.ecourts.gov.in` | Duration and outcome models, NJDG CBR case base |
+| IBBI CIRP | `ibbi.gov.in` | Realisation model, IBC CBR case base |
 | eCourts | `ecourts.gov.in` | Judgment outcome labels |
 
 > When real government exports are not available, the pipeline automatically falls back to synthetic data generators that mirror real-world Indian litigation distributions.
@@ -149,4 +203,4 @@ The dashboard opens at `http://localhost:8501`. Navigate through the **Case Asse
 
 ## Ethical Disclaimer
 
-ILFRA is an **advisory tool only**. Its predictions are based on statistical patterns and carry inherent uncertainty. They should not be treated as legal advice or as a guarantee of case outcome. All funding and legal decisions must involve qualified legal professionals.
+ILFRA is an **advisory tool only**. Its predictions are based on statistical patterns and retrieved precedents, and carry inherent uncertainty. They should not be treated as legal advice or as a guarantee of case outcome. All funding and legal decisions must involve qualified legal professionals.
