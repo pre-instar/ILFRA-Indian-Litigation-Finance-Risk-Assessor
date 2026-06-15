@@ -363,7 +363,9 @@ def train_realisation(df: pd.DataFrame) -> dict:
     preds = m.predict(Xte)
     mae = mean_absolute_error(yte, preds)
     r2  = r2_score(yte, preds)
-    print(f"[ibbi_pipeline] Realisation — MAE: {mae:.1f}% | R²: {r2:.3f}")
+    mse= mean_squared_error(yte, preds)
+    rmse = np.sqrt(mse)
+    print(f"[ibbi_pipeline] Realisation — MAE: {mae:.1f}% | R²: {r2:.3f} | RMSE: {rmse:.1f}%")
 
     joblib.dump(m,   MODELS_DIR / "realisation_model.pkl")
     joblib.dump(q10, MODELS_DIR / "realisation_q10.pkl")
@@ -371,7 +373,7 @@ def train_realisation(df: pd.DataFrame) -> dict:
     _save_fi(m, fc, "realisation")
     _save_shap(m, Xtr.values, fc, "realisation")
 
-    return {"mae_pct": round(mae, 2), "r2": round(r2, 3)}
+    return {"mae_pct": round(mae, 2), "r2": round(r2, 3), "rmse": round(rmse, 2)}
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
